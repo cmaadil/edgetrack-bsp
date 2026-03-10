@@ -1,0 +1,9 @@
+{
+  "name": "edgetrack-bsp",
+  "version": "1.0.0",
+  "description": "BSP fetch proxy for EdgeTrack",
+  "private": true,
+  "engines": {
+    "node": "18.x"
+  }
+}
