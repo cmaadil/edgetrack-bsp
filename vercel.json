@@ -1,8 +1,8 @@
 {
   "version": 2,
   "functions": {
-    "api/bsp.js": {
-      "regions": ["lhr1"]
-    }
+    "api/bsp.js":    { "regions": ["lhr1"] },
+    "api/races.js":  { "regions": ["lhr1"] },
+    "api/settle.js": { "regions": ["lhr1"] }
   }
 }
