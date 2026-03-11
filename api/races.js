@@ -63,8 +63,8 @@ export default async function handler(req, res) {
     const token = await getSessionToken();
 
     const now  = new Date();
-    const from = new Date(now.getTime() - 60 * 60 * 1000).toISOString(); // 1hr ago
-    const to   = new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString(); // 12hrs ahead
+    const from = new Date(now.getTime() - 60 * 60 * 1000).toISOString();       // 1hr ago
+    const to   = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString(); // 24hrs ahead
 
     // Get all WIN markets — these define the races
     const markets = await betfairCall(token, 'listMarketCatalogue', {
