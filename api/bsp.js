@@ -73,12 +73,15 @@ function extractPlaceCount(marketName) {
 }
 
 function classifyMarket(marketType, marketName) {
-  if (marketType === 'WIN' || /^win$/i.test(marketName)) return 'win';
+  if (marketType === 'WIN') return 'win';
   if (marketType === 'PLACE') return 'place';
+  if (marketType === 'OTHER_PLACE') return 'place'; // extra place markets e.g. 4 TBP
+  if (marketType === 'EACH_WAY') return 'other';
+  if (marketType === 'MATCH_BET' || marketType === 'REV_FORECAST') return 'other';
+  // fallback on name
+  if (/^win$/i.test(marketName)) return 'win';
+  if (/to be placed|tbp/i.test(marketName)) return 'place';
   if (/top\s*\d+\s*fi/i.test(marketName)) return 'place';
-  if (/extra.?place|each.?way/i.test(marketName)) return 'place';
-  if (/to be placed|place betting/i.test(marketName)) return 'place';
-  if (/match.?odds/i.test(marketName)) return 'win';
   return 'other';
 }
 
@@ -127,7 +130,7 @@ export default async function handler(req, res) {
 
     const raceMs = raceDate.getTime();
     let matchingMarkets = markets.filter(m =>
-      Math.abs(new Date(m.marketStartTime).getTime() - raceMs) < 10 * 60 * 1000
+      Math.abs(new Date(m.marketStartTime).getTime() - raceMs) < 20 * 60 * 1000
     );
     if (!matchingMarkets.length) matchingMarkets = markets.slice(0, 10);
 
