@@ -6,19 +6,22 @@ const BF_EMAIL    = process.env.BETFAIR_EMAIL;
 const BF_PASS     = process.env.BETFAIR_PASS;
 
 async function getSessionToken() {
-  // Betfair non-interactive login (for server-side use)
-  const res = await fetch('https://identitysso-cert.betfair.com/api/login', {
+  const res = await fetch('https://identitysso.betfair.com/api/login', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       'X-Application': APP_KEY,
       'Accept': 'application/json',
+      'User-Agent': 'Mozilla/5.0',
     },
     body: new URLSearchParams({ username: BF_EMAIL, password: BF_PASS }).toString(),
+    redirect: 'follow',
   });
   const text = await res.text();
+  console.log('Betfair login response status:', res.status);
+  console.log('Betfair login response:', text.slice(0, 300));
   let data;
-  try { data = JSON.parse(text); } catch(e) { throw new Error('Betfair login returned HTML — check credentials. Raw: ' + text.slice(0, 200)); }
+  try { data = JSON.parse(text); } catch(e) { throw new Error('Login parse failed: ' + text.slice(0, 200)); }
   if (data.status !== 'SUCCESS') throw new Error('Betfair login failed: ' + (data.error || JSON.stringify(data)));
   return data.token;
 }
@@ -119,14 +122,14 @@ export default async function handler(req, res) {
 
     const winMarket = enriched.find(m => m.kind === 'win');
     const allPlaceMarkets = enriched.filter(m => m.kind === 'place');
-    let bestPlaceMarket = requestedPlaces
+    const bestPlaceMarket = requestedPlaces
       ? (allPlaceMarkets.find(m => m.placeCount === requestedPlaces) || allPlaceMarkets.find(m => m.placeCount === requestedPlaces - 1) || allPlaceMarkets[0])
       : allPlaceMarkets[0] || null;
 
     return res.status(200).json({ winMarket, bestPlaceMarket, allPlaceMarkets, allMarkets: enriched });
 
   } catch (err) {
-    console.error('BSP fetch error:', err);
+    console.error('BSP fetch error:', err.message);
     return res.status(500).json({ error: err.message });
   }
 }
