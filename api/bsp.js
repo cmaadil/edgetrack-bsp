@@ -12,10 +12,8 @@ async function getSessionToken() {
       'Content-Type': 'application/x-www-form-urlencoded',
       'X-Application': APP_KEY,
       'Accept': 'application/json',
-      'User-Agent': 'Mozilla/5.0',
     },
     body: new URLSearchParams({ username: BF_EMAIL, password: BF_PASS }).toString(),
-    redirect: 'follow',
   });
   const text = await res.text();
   console.log('Betfair login response status:', res.status);
