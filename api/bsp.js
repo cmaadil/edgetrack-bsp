@@ -114,7 +114,7 @@ export default async function handler(req, res) {
         eventTypeIds: ['7'],
         marketCountries: ['GB', 'IE'],
         marketStartTime: { from, to },
-        textQuery: course || undefined,
+        // textQuery removed — Betfair venue names don't always match user input
       },
       marketProjection: ['MARKET_START_TIME', 'RUNNER_DESCRIPTION', 'MARKET_DESCRIPTION', 'EVENT'],
       maxResults: 100,
