@@ -1,5 +1,3 @@
-// api/bsp.js — Vercel serverless function (cert-based login)
-
 import https from 'https';
 
 const BETFAIR_API = 'https://api.betfair.com/exchange/betting/rest/v1.0';
@@ -49,9 +47,7 @@ async function getSessionToken() {
     key,
   }, body);
 
-  console.log('Betfair cert login status:', res.status);
-  console.log('Betfair cert login response:', res.text.slice(0, 300));
-
+  console.log('Login status:', res.status, '| response:', res.text.slice(0, 200));
   let data;
   try { data = JSON.parse(res.text); } catch(e) { throw new Error('Login parse failed: ' + res.text.slice(0, 200)); }
   if (data.loginStatus !== 'SUCCESS') throw new Error('Betfair login failed: ' + (data.loginStatus || JSON.stringify(data)));
@@ -92,16 +88,26 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const { course, date, time, horse, ewPlaces } = req.query;
-  if (!date) return res.status(400).json({ error: 'date is required (YYYY-MM-DD)' });
+  if (!date) return res.status(400).json({ error: 'date is required' });
 
   const requestedPlaces = ewPlaces ? parseInt(ewPlaces) : null;
 
   try {
     const token = await getSessionToken();
 
-    const raceDate = new Date(`${date}T${time || '12:00'}:00Z`);
-    const from = new Date(raceDate.getTime() - 30 * 60 * 1000).toISOString();
-    const to   = new Date(raceDate.getTime() + 30 * 60 * 1000).toISOString();
+    // Normalise date — handle DD/MM/YYYY or YYYY-MM-DD
+    let normDate = date;
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(date)) {
+      const [d, m, y] = date.split('/');
+      normDate = `${y}-${m}-${d}`;
+    }
+
+    const raceDate = new Date(`${normDate}T${time || '12:00'}:00Z`);
+    // Wide window — settled markets may not appear in narrow searches
+    const from = new Date(raceDate.getTime() - 2 * 60 * 60 * 1000).toISOString();
+    const to   = new Date(raceDate.getTime() + 2 * 60 * 60 * 1000).toISOString();
+
+    console.log('Search:', { normDate, time, from, to, course, horse });
 
     const markets = await betfairCall(token, 'listMarketCatalogue', {
       filter: {
@@ -114,6 +120,8 @@ export default async function handler(req, res) {
       maxResults: 100,
       sort: 'FIRST_TO_START',
     });
+
+    console.log('Markets found:', markets?.length, JSON.stringify(markets?.slice(0,5).map(m => ({ n: m.marketName, t: m.marketStartTime }))));
 
     if (!markets?.length) return res.status(404).json({ error: 'No markets found for this race' });
 
