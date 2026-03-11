@@ -4,6 +4,6 @@
   "description": "BSP fetch proxy for EdgeTrack",
   "private": true,
   "engines": {
-    "node": "18.x"
+    "node": "20.x"
   }
 }
