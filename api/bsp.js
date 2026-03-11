@@ -1,27 +1,43 @@
-// api/bsp.js — Vercel serverless function
+// api/bsp.js — Vercel serverless function (cert-based login)
 
 const BETFAIR_API = 'https://api.betfair.com/exchange/betting/rest/v1.0';
 const APP_KEY     = process.env.BETFAIR_APP_KEY;
 const BF_EMAIL    = process.env.BETFAIR_EMAIL;
 const BF_PASS     = process.env.BETFAIR_PASS;
+const BF_CERT     = process.env.BETFAIR_CERT; // base64 encoded .crt
+const BF_KEY      = process.env.BETFAIR_KEY;  // base64 encoded .key
+
+import https from 'https';
 
 async function getSessionToken() {
-  const res = await fetch('https://identitysso.betfair.com/api/login', {
+  const cert = Buffer.from(BF_CERT, 'base64').toString('utf8');
+  const key  = Buffer.from(BF_KEY,  'base64').toString('utf8');
+
+  const agent = new https.Agent({ cert, key, rejectUnauthorized: false });
+
+  const body = new URLSearchParams({ username: BF_EMAIL, password: BF_PASS }).toString();
+
+  const res = await fetch('https://identitysso-cert.betfair.com/api/certlogin', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       'X-Application': APP_KEY,
       'Accept': 'application/json',
     },
-    body: new URLSearchParams({ username: BF_EMAIL, password: BF_PASS }).toString(),
+    body,
+    // @ts-ignore — Node 18+ fetch accepts agent via dispatcher workaround
+    agent,
   });
+
   const text = await res.text();
-  console.log('Betfair login response status:', res.status);
-  console.log('Betfair login response:', text.slice(0, 300));
+  console.log('Betfair cert login status:', res.status);
+  console.log('Betfair cert login response:', text.slice(0, 300));
+
   let data;
   try { data = JSON.parse(text); } catch(e) { throw new Error('Login parse failed: ' + text.slice(0, 200)); }
-  if (data.status !== 'SUCCESS') throw new Error('Betfair login failed: ' + (data.error || JSON.stringify(data)));
-  return data.token;
+  // cert login returns { sessionToken, loginStatus }
+  if (data.loginStatus !== 'SUCCESS') throw new Error('Betfair login failed: ' + (data.loginStatus || JSON.stringify(data)));
+  return data.sessionToken;
 }
 
 async function betfairCall(sessionToken, method, params) {
