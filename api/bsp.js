@@ -1,25 +1,25 @@
 // api/bsp.js — Vercel serverless function
-// Fetches Win BSP + Place BSPs (with place count) for a given race
 
-const BETFAIR_LOGIN = 'https://identitysso.betfair.com/api/login';
-const BETFAIR_API   = 'https://api.betfair.com/exchange/betting/rest/v1.0';
-const APP_KEY       = process.env.BETFAIR_APP_KEY;
-const BF_EMAIL      = process.env.BETFAIR_EMAIL;
-const BF_PASS       = process.env.BETFAIR_PASS;
+const BETFAIR_API = 'https://api.betfair.com/exchange/betting/rest/v1.0';
+const APP_KEY     = process.env.BETFAIR_APP_KEY;
+const BF_EMAIL    = process.env.BETFAIR_EMAIL;
+const BF_PASS     = process.env.BETFAIR_PASS;
 
 async function getSessionToken() {
-  const params = new URLSearchParams({ username: BF_EMAIL, password: BF_PASS });
-  const res = await fetch(BETFAIR_LOGIN, {
+  // Betfair non-interactive login (for server-side use)
+  const res = await fetch('https://identitysso-cert.betfair.com/api/login', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       'X-Application': APP_KEY,
       'Accept': 'application/json',
     },
-    body: params.toString(),
+    body: new URLSearchParams({ username: BF_EMAIL, password: BF_PASS }).toString(),
   });
-  const data = await res.json();
-  if (data.status !== 'SUCCESS') throw new Error('Betfair login failed: ' + data.error);
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch(e) { throw new Error('Betfair login returned HTML — check credentials. Raw: ' + text.slice(0, 200)); }
+  if (data.status !== 'SUCCESS') throw new Error('Betfair login failed: ' + (data.error || JSON.stringify(data)));
   return data.token;
 }
 
@@ -37,13 +37,14 @@ async function betfairCall(sessionToken, method, params) {
 }
 
 function extractPlaceCount(marketName) {
-  const m = marketName.match(/(\d+)\s*place/i);
+  const m = marketName.match(/(\d+)\s*(?:place|fi)/i);
   return m ? parseInt(m[1]) : null;
 }
 
 function classifyMarket(marketType, marketName) {
   if (marketType === 'WIN' || /^win$/i.test(marketName)) return 'win';
   if (marketType === 'PLACE') return 'place';
+  if (/top\s*\d+\s*fi/i.test(marketName)) return 'place';
   if (/extra.?place|each.?way/i.test(marketName)) return 'place';
   if (/to be placed|place betting/i.test(marketName)) return 'place';
   if (/match.?odds/i.test(marketName)) return 'win';
@@ -79,9 +80,7 @@ export default async function handler(req, res) {
       sort: 'FIRST_TO_START',
     });
 
-    if (!markets?.length) {
-      return res.status(404).json({ error: 'No markets found for this race' });
-    }
+    if (!markets?.length) return res.status(404).json({ error: 'No markets found for this race' });
 
     const raceMs = raceDate.getTime();
     let matchingMarkets = markets.filter(m =>
@@ -89,10 +88,8 @@ export default async function handler(req, res) {
     );
     if (!matchingMarkets.length) matchingMarkets = markets.slice(0, 10);
 
-    const marketIds = matchingMarkets.map(m => m.marketId);
-
     const books = await betfairCall(token, 'listMarketBook', {
-      marketIds,
+      marketIds: matchingMarkets.map(m => m.marketId),
       priceProjection: { bspPrices: true },
     });
 
@@ -105,12 +102,7 @@ export default async function handler(req, res) {
       const book = books.find(b => b.marketId === market.marketId);
       const runners = (book?.runners || []).map(r => {
         const desc = market.runners?.find(rd => rd.selectionId === r.selectionId);
-        return {
-          name: desc?.runnerName || 'Unknown',
-          selectionId: r.selectionId,
-          bsp: r.sp?.actualSP ?? null,
-          status: r.status,
-        };
+        return { name: desc?.runnerName || 'Unknown', selectionId: r.selectionId, bsp: r.sp?.actualSP ?? null, status: r.status };
       }).filter(r => r.status !== 'REMOVED');
 
       let targetRunner = null;
@@ -127,15 +119,9 @@ export default async function handler(req, res) {
 
     const winMarket = enriched.find(m => m.kind === 'win');
     const allPlaceMarkets = enriched.filter(m => m.kind === 'place');
-
-    let bestPlaceMarket = null;
-    if (requestedPlaces) {
-      bestPlaceMarket = allPlaceMarkets.find(m => m.placeCount === requestedPlaces)
-        || allPlaceMarkets.find(m => m.placeCount === requestedPlaces - 1)
-        || allPlaceMarkets[0];
-    } else {
-      bestPlaceMarket = allPlaceMarkets[0] || null;
-    }
+    let bestPlaceMarket = requestedPlaces
+      ? (allPlaceMarkets.find(m => m.placeCount === requestedPlaces) || allPlaceMarkets.find(m => m.placeCount === requestedPlaces - 1) || allPlaceMarkets[0])
+      : allPlaceMarkets[0] || null;
 
     return res.status(200).json({ winMarket, bestPlaceMarket, allPlaceMarkets, allMarkets: enriched });
 
