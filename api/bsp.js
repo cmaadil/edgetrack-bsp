@@ -1,5 +1,5 @@
 // api/bsp.js — Vercel serverless function
-// Fetches BSP for win + any extra place markets for a given race
+// Fetches Win BSP + Place BSPs (with place count) for a given race
 
 const BETFAIR_LOGIN = 'https://identitysso.betfair.com/api/login';
 const BETFAIR_API   = 'https://api.betfair.com/exchange/betting/rest/v1.0';
@@ -36,95 +36,108 @@ async function betfairCall(sessionToken, method, params) {
   return res.json();
 }
 
+function extractPlaceCount(marketName) {
+  const m = marketName.match(/(\d+)\s*place/i);
+  return m ? parseInt(m[1]) : null;
+}
+
+function classifyMarket(marketType, marketName) {
+  if (marketType === 'WIN' || /^win$/i.test(marketName)) return 'win';
+  if (marketType === 'PLACE') return 'place';
+  if (/extra.?place|each.?way/i.test(marketName)) return 'place';
+  if (/to be placed|place betting/i.test(marketName)) return 'place';
+  if (/match.?odds/i.test(marketName)) return 'win';
+  return 'other';
+}
+
 export default async function handler(req, res) {
-  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const { course, date, time, horse } = req.query;
-  // date format expected: YYYY-MM-DD, time: HH:MM
-
+  const { course, date, time, horse, ewPlaces } = req.query;
   if (!date) return res.status(400).json({ error: 'date is required (YYYY-MM-DD)' });
+
+  const requestedPlaces = ewPlaces ? parseInt(ewPlaces) : null;
 
   try {
     const token = await getSessionToken();
 
-    // Search window: ±2 hours around race time to catch all market types
     const raceDate = new Date(`${date}T${time || '12:00'}:00Z`);
-    const from = new Date(raceDate.getTime() - 2 * 60 * 60 * 1000).toISOString();
-    const to   = new Date(raceDate.getTime() + 2 * 60 * 60 * 1000).toISOString();
+    const from = new Date(raceDate.getTime() - 30 * 60 * 1000).toISOString();
+    const to   = new Date(raceDate.getTime() + 30 * 60 * 1000).toISOString();
 
-    // Fetch all UK/IE horse racing markets around this race time
     const markets = await betfairCall(token, 'listMarketCatalogue', {
       filter: {
-        eventTypeIds: ['7'], // Horse Racing
+        eventTypeIds: ['7'],
         marketCountries: ['GB', 'IE'],
         marketStartTime: { from, to },
         textQuery: course || undefined,
       },
-      marketProjection: ['MARKET_START_TIME', 'RUNNER_DESCRIPTION', 'EVENT'],
-      maxResults: 50,
+      marketProjection: ['MARKET_START_TIME', 'RUNNER_DESCRIPTION', 'MARKET_DESCRIPTION', 'EVENT'],
+      maxResults: 100,
       sort: 'FIRST_TO_START',
     });
 
-    if (!markets || !markets.length) {
+    if (!markets?.length) {
       return res.status(404).json({ error: 'No markets found for this race' });
     }
 
-    // Filter to markets matching our race time (within 10 mins)
     const raceMs = raceDate.getTime();
-    const matchingMarkets = markets.filter(m => {
-      const mMs = new Date(m.marketStartTime).getTime();
-      return Math.abs(mMs - raceMs) < 10 * 60 * 1000;
-    });
-
-    if (!matchingMarkets.length) {
-      // Fall back to all returned markets if time filter too strict
-      matchingMarkets.push(...markets.slice(0, 5));
-    }
+    let matchingMarkets = markets.filter(m =>
+      Math.abs(new Date(m.marketStartTime).getTime() - raceMs) < 10 * 60 * 1000
+    );
+    if (!matchingMarkets.length) matchingMarkets = markets.slice(0, 10);
 
     const marketIds = matchingMarkets.map(m => m.marketId);
 
-    // Fetch BSP for all runners in these markets
     const books = await betfairCall(token, 'listMarketBook', {
       marketIds,
       priceProjection: { bspPrices: true },
     });
 
-    // Build response: for each market, find our horse and return its BSP
-    const results = matchingMarkets.map(market => {
+    const enriched = matchingMarkets.map(market => {
+      const marketType = market.description?.marketType || '';
+      const marketName = market.marketName || '';
+      const kind = classifyMarket(marketType, marketName);
+      const placeCount = kind === 'place' ? extractPlaceCount(marketName) : null;
+
       const book = books.find(b => b.marketId === market.marketId);
       const runners = (book?.runners || []).map(r => {
-        const runnerDesc = market.runners?.find(rd => rd.selectionId === r.selectionId);
+        const desc = market.runners?.find(rd => rd.selectionId === r.selectionId);
         return {
-          name: runnerDesc?.runnerName || 'Unknown',
+          name: desc?.runnerName || 'Unknown',
           selectionId: r.selectionId,
-          bsp: r.sp?.actualSP || null,
+          bsp: r.sp?.actualSP ?? null,
           status: r.status,
         };
       }).filter(r => r.status !== 'REMOVED');
 
-      // Try to match horse name if provided
       let targetRunner = null;
       if (horse) {
         const horseLower = horse.toLowerCase().replace(/[^a-z0-9]/g, '');
         targetRunner = runners.find(r => {
-          const nameLower = r.name.toLowerCase().replace(/[^a-z0-9]/g, '');
-          return nameLower.includes(horseLower) || horseLower.includes(nameLower);
-        });
+          const n = r.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+          return n.includes(horseLower) || horseLower.includes(n);
+        }) || null;
       }
 
-      return {
-        marketId: market.marketId,
-        marketName: market.marketName || market.marketId,
-        startTime: market.marketStartTime,
-        targetRunner,
-        allRunners: runners,
-      };
+      return { marketId: market.marketId, marketName, marketType, kind, placeCount, startTime: market.marketStartTime, targetRunner, allRunners: runners };
     });
 
-    return res.status(200).json({ markets: results });
+    const winMarket = enriched.find(m => m.kind === 'win');
+    const allPlaceMarkets = enriched.filter(m => m.kind === 'place');
+
+    let bestPlaceMarket = null;
+    if (requestedPlaces) {
+      bestPlaceMarket = allPlaceMarkets.find(m => m.placeCount === requestedPlaces)
+        || allPlaceMarkets.find(m => m.placeCount === requestedPlaces - 1)
+        || allPlaceMarkets[0];
+    } else {
+      bestPlaceMarket = allPlaceMarkets[0] || null;
+    }
+
+    return res.status(200).json({ winMarket, bestPlaceMarket, allPlaceMarkets, allMarkets: enriched });
 
   } catch (err) {
     console.error('BSP fetch error:', err);
