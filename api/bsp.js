@@ -1,41 +1,59 @@
 // api/bsp.js — Vercel serverless function (cert-based login)
 
+import https from 'https';
+
 const BETFAIR_API = 'https://api.betfair.com/exchange/betting/rest/v1.0';
 const APP_KEY     = process.env.BETFAIR_APP_KEY;
 const BF_EMAIL    = process.env.BETFAIR_EMAIL;
 const BF_PASS     = process.env.BETFAIR_PASS;
-const BF_CERT     = process.env.BETFAIR_CERT; // base64 encoded .crt
-const BF_KEY      = process.env.BETFAIR_KEY;  // base64 encoded .key
+const BF_CERT     = process.env.BETFAIR_CERT;
+const BF_KEY      = process.env.BETFAIR_KEY;
 
-import https from 'https';
+function httpsRequest(url, options, body) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const reqOptions = {
+      hostname: parsed.hostname,
+      path: parsed.pathname + parsed.search,
+      method: options.method || 'GET',
+      headers: options.headers || {},
+      cert: options.cert,
+      key: options.key,
+      rejectUnauthorized: false,
+    };
+    const req = https.request(reqOptions, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve({ status: res.statusCode, text: data }));
+    });
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
 
 async function getSessionToken() {
   const cert = Buffer.from(BF_CERT, 'base64').toString('utf8');
   const key  = Buffer.from(BF_KEY,  'base64').toString('utf8');
-
-  const agent = new https.Agent({ cert, key, rejectUnauthorized: false });
-
   const body = new URLSearchParams({ username: BF_EMAIL, password: BF_PASS }).toString();
 
-  const res = await fetch('https://identitysso-cert.betfair.com/api/certlogin', {
+  const res = await httpsRequest('https://identitysso-cert.betfair.com/api/certlogin', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       'X-Application': APP_KEY,
       'Accept': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
     },
-    body,
-    // @ts-ignore — Node 18+ fetch accepts agent via dispatcher workaround
-    agent,
-  });
+    cert,
+    key,
+  }, body);
 
-  const text = await res.text();
   console.log('Betfair cert login status:', res.status);
-  console.log('Betfair cert login response:', text.slice(0, 300));
+  console.log('Betfair cert login response:', res.text.slice(0, 300));
 
   let data;
-  try { data = JSON.parse(text); } catch(e) { throw new Error('Login parse failed: ' + text.slice(0, 200)); }
-  // cert login returns { sessionToken, loginStatus }
+  try { data = JSON.parse(res.text); } catch(e) { throw new Error('Login parse failed: ' + res.text.slice(0, 200)); }
   if (data.loginStatus !== 'SUCCESS') throw new Error('Betfair login failed: ' + (data.loginStatus || JSON.stringify(data)));
   return data.sessionToken;
 }
