@@ -139,7 +139,7 @@ export default async function handler(req, res) {
       priceProjection: { bspPrices: true },
     });
 
-    // If no BSP settled yet, also fetch live exchange prices as fallback
+    // If no BSP settled yet, fetch live exchange prices (back + lay) for mid-price
     const anyBSP = books.some(b => b.runners?.some(r => r.sp?.actualSP > 1));
     let liveBooks = [];
     if (!anyBSP) {
@@ -161,13 +161,16 @@ export default async function handler(req, res) {
         const desc = market.runners?.find(rd => rd.selectionId === r.selectionId);
         const bsp = r.sp?.actualSP > 1 ? r.sp.actualSP : null;
         const liveRunner = liveBook?.runners?.find(lr => lr.selectionId === r.selectionId);
-        const livePrice = liveRunner?.ex?.availableToBack?.[0]?.price ?? null;
+        const bestBack = liveRunner?.ex?.availableToBack?.[0]?.price ?? null;
+        const bestLay  = liveRunner?.ex?.availableToLay?.[0]?.price ?? null;
+        // Mid-price = (back + lay) / 2 — true fair value with no overround
+        const midPrice = bestBack > 1 && bestLay > 1 ? parseFloat(((bestBack + bestLay) / 2).toFixed(2)) : (bestBack > 1 ? bestBack : null);
         return {
           name: desc?.runnerName || 'Unknown',
           selectionId: r.selectionId,
           bsp,
-          livePrice: !bsp && livePrice > 1 ? livePrice : null,
-          isLive: !bsp && livePrice > 1,
+          livePrice: !bsp && midPrice > 1 ? midPrice : null,
+          isLive: !bsp && midPrice > 1,
           status: r.status
         };
       }).filter(r => r.status !== 'REMOVED');
