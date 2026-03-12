@@ -139,6 +139,16 @@ export default async function handler(req, res) {
       priceProjection: { bspPrices: true },
     });
 
+    // If no BSP settled yet, also fetch live exchange prices as fallback
+    const anyBSP = books.some(b => b.runners?.some(r => r.sp?.actualSP > 1));
+    let liveBooks = [];
+    if (!anyBSP) {
+      liveBooks = await betfairCall(token, 'listMarketBook', {
+        marketIds: matchingMarkets.map(m => m.marketId),
+        priceProjection: { priceData: ['EX_BEST_OFFERS'] },
+      });
+    }
+
     const enriched = matchingMarkets.map(market => {
       const marketType = market.description?.marketType || '';
       const marketName = market.marketName || '';
@@ -146,9 +156,20 @@ export default async function handler(req, res) {
       const placeCount = kind === 'place' ? extractPlaceCount(marketName) : null;
 
       const book = books.find(b => b.marketId === market.marketId);
+      const liveBook = liveBooks.find(b => b.marketId === market.marketId);
       const runners = (book?.runners || []).map(r => {
         const desc = market.runners?.find(rd => rd.selectionId === r.selectionId);
-        return { name: desc?.runnerName || 'Unknown', selectionId: r.selectionId, bsp: r.sp?.actualSP ?? null, status: r.status };
+        const bsp = r.sp?.actualSP > 1 ? r.sp.actualSP : null;
+        const liveRunner = liveBook?.runners?.find(lr => lr.selectionId === r.selectionId);
+        const livePrice = liveRunner?.ex?.availableToBack?.[0]?.price ?? null;
+        return {
+          name: desc?.runnerName || 'Unknown',
+          selectionId: r.selectionId,
+          bsp,
+          livePrice: !bsp && livePrice > 1 ? livePrice : null,
+          isLive: !bsp && livePrice > 1,
+          status: r.status
+        };
       }).filter(r => r.status !== 'REMOVED');
 
       let targetRunner = null;
