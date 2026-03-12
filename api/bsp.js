@@ -129,9 +129,23 @@ export default async function handler(req, res) {
     if (!markets?.length) return res.status(404).json({ error: 'Market closed' });
 
     const raceMs = raceDate.getTime();
+    // Tighten time window to ±10min when time was provided
+    const timeWindowMs = time ? 10 * 60 * 1000 : 20 * 60 * 1000;
     let matchingMarkets = markets.filter(m =>
-      Math.abs(new Date(m.marketStartTime).getTime() - raceMs) < 20 * 60 * 1000
+      Math.abs(new Date(m.marketStartTime).getTime() - raceMs) < timeWindowMs
     );
+
+    // Filter by course if provided — match against event venue or name
+    if (course && matchingMarkets.length > 0) {
+      const courseLower = course.toLowerCase().replace(/[^a-z]/g, '');
+      const courseFiltered = matchingMarkets.filter(m => {
+        const venue = (m.event?.venue || m.event?.name || '').toLowerCase().replace(/[^a-z]/g, '');
+        return venue.includes(courseLower) || courseLower.includes(venue.slice(0, 4));
+      });
+      // Only apply course filter if it returns results — avoids over-filtering on venue name mismatches
+      if (courseFiltered.length > 0) matchingMarkets = courseFiltered;
+    }
+
     if (!matchingMarkets.length) matchingMarkets = markets.slice(0, 10);
 
     const books = await betfairCall(token, 'listMarketBook', {
