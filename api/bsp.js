@@ -205,8 +205,9 @@ export default async function handler(req, res) {
 
     const winMarket = enriched.find(m => m.kind === 'win');
     const allPlaceMarkets = enriched.filter(m => m.kind === 'place');
+    console.log('Place markets found:', allPlaceMarkets.map(m => ({ name: m.marketName, placeCount: m.placeCount })));
     const bestPlaceMarket = requestedPlaces
-      ? (allPlaceMarkets.find(m => m.placeCount === requestedPlaces) || allPlaceMarkets.find(m => m.placeCount === requestedPlaces - 1) || allPlaceMarkets[0])
+      ? (allPlaceMarkets.find(m => m.placeCount === requestedPlaces) || allPlaceMarkets[0])
       : allPlaceMarkets[0] || null;
 
     return res.status(200).json({ winMarket, bestPlaceMarket, allPlaceMarkets, allMarkets: enriched });
