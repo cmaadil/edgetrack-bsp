@@ -126,7 +126,7 @@ export default async function handler(req, res) {
 
     console.log('Markets found:', markets?.length, JSON.stringify(markets?.slice(0,10).map(m => ({ n: m.marketName, t: m.marketStartTime, mt: m.description?.marketType }))));
 
-    if (!markets?.length) return res.status(404).json({ error: 'No markets found for this race' });
+    if (!markets?.length) return res.status(404).json({ error: 'Market closed' });
 
     const raceMs = raceDate.getTime();
     let matchingMarkets = markets.filter(m =>
