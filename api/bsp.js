@@ -139,12 +139,24 @@ export default async function handler(req, res) {
       priceProjection: { bspPrices: true },
     });
 
-    // If no BSP settled yet, fetch live exchange prices (back + lay) for mid-price
-    const anyBSP = books.some(b => b.runners?.some(r => r.sp?.actualSP > 1));
+    // Check market statuses - never use live prices in-play or post-race
+    const marketStatuses = {};
+    books.forEach(b => { marketStatuses[b.marketId] = b.status; });
+
+    // Only fetch live prices for markets that are OPEN and pre-race (not IN_PLAY, SUSPENDED, CLOSED)
+    const preRaceMarketIds = matchingMarkets
+      .map(m => m.marketId)
+      .filter(id => {
+        const status = marketStatuses[id];
+        const book = books.find(b => b.marketId === id);
+        const hasBSP = book?.runners?.some(r => r.sp?.actualSP > 1.01);
+        return !hasBSP && (status === 'OPEN') && !books.find(b => b.marketId === id)?.inplay;
+      });
+
     let liveBooks = [];
-    if (!anyBSP) {
+    if (preRaceMarketIds.length > 0) {
       liveBooks = await betfairCall(token, 'listMarketBook', {
-        marketIds: matchingMarkets.map(m => m.marketId),
+        marketIds: preRaceMarketIds,
         priceProjection: { priceData: ['EX_BEST_OFFERS'] },
       });
     }
@@ -157,20 +169,24 @@ export default async function handler(req, res) {
 
       const book = books.find(b => b.marketId === market.marketId);
       const liveBook = liveBooks.find(b => b.marketId === market.marketId);
+      const isPreRace = preRaceMarketIds.includes(market.marketId);
+
       const runners = (book?.runners || []).map(r => {
         const desc = market.runners?.find(rd => rd.selectionId === r.selectionId);
-        const bsp = r.sp?.actualSP > 1 ? r.sp.actualSP : null;
-        const liveRunner = liveBook?.runners?.find(lr => lr.selectionId === r.selectionId);
+        const bsp = r.sp?.actualSP > 1.01 ? r.sp.actualSP : null;
+        const liveRunner = isPreRace ? liveBook?.runners?.find(lr => lr.selectionId === r.selectionId) : null;
         const bestBack = liveRunner?.ex?.availableToBack?.[0]?.price ?? null;
         const bestLay  = liveRunner?.ex?.availableToLay?.[0]?.price ?? null;
         // Mid-price = (back + lay) / 2 — true fair value with no overround
-        const midPrice = bestBack > 1 && bestLay > 1 ? parseFloat(((bestBack + bestLay) / 2).toFixed(2)) : (bestBack > 1 ? bestBack : null);
+        const midPrice = bestBack > 1.01 && bestLay > 1.01
+          ? parseFloat(((bestBack + bestLay) / 2).toFixed(2))
+          : (bestBack > 1.01 ? bestBack : null);
         return {
           name: desc?.runnerName || 'Unknown',
           selectionId: r.selectionId,
           bsp,
-          livePrice: !bsp && midPrice > 1 ? midPrice : null,
-          isLive: !bsp && midPrice > 1,
+          livePrice: !bsp && midPrice ? midPrice : null,
+          isLive: !bsp && !!midPrice,
           status: r.status
         };
       }).filter(r => r.status !== 'REMOVED');
