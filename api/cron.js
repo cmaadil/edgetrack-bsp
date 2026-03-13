@@ -92,11 +92,12 @@ function getMidPrice(runner) {
 }
 
 function extractPlaceCount(market) {
-  const fromDesc = market.description?.numberOfWinners;
-  if (fromDesc && fromDesc > 1) return fromDesc;
   const name = market.marketName || '';
-  const m = name.match(/(\d+)\s*(?:place|fi|tbp)/i) || name.match(/top\s*(\d+)/i);
-  return m ? parseInt(m[1]) : null;
+  const topN = name.match(/top\s*(\d+)/i);
+  if (topN) return parseInt(topN[1]);
+  const leadingN = name.match(/^(\d+)\s*/);
+  if (leadingN) return parseInt(leadingN[1]);
+  return null;
 }
 
 // ── Main handler ─────────────────────────────────────────────────────────────
@@ -216,6 +217,7 @@ export default async function handler(req, res) {
         } else if (isPlace) {
           result.placeMarkets.push({
             marketId: market.marketId,
+            marketType: mt,
             placeCount: extractPlaceCount(market),
             runners,
           });
@@ -253,9 +255,11 @@ export default async function handler(req, res) {
 
           // Place mid-price → place_bsp
           if (sel.ew_places || bet.each_way) {
-            const ewPlaces = parseInt(sel.ew_places) || 3;
-            const placeMarket = markets.placeMarkets.find(p => p.placeCount === ewPlaces)
-              || markets.placeMarkets[0];
+            const ewPlaces = parseInt(sel.ew_places) || (bet.each_way ? 3 : null);
+            let placeMarket = null;
+            if (ewPlaces) placeMarket = markets.placeMarkets.find(p => p.placeCount === ewPlaces);
+            if (!placeMarket) placeMarket = markets.placeMarkets.find(p => p.marketType === 'PLACE');
+            if (!placeMarket) placeMarket = markets.placeMarkets.slice().sort((a,b) => (a.placeCount||99)-(b.placeCount||99))[0];
             const placeRunner = findRunner(placeMarket?.runners);
             if (placeRunner?.midPrice) {
               sel.place_bsp = placeRunner.midPrice;
