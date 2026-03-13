@@ -163,12 +163,30 @@ export default async function handler(req, res) {
     const winMarket = enriched.find(m => m.kind === 'win' && m.isUsable);
     const allPlaceMarkets = enriched.filter(m => m.kind === 'place' && m.isUsable);
 
+    // Log everything so we can debug mismatches
+    console.log('All place markets:', JSON.stringify(allPlaceMarkets.map(m => ({
+      name: m.marketName,
+      type: m.marketType,
+      placeCount: m.placeCount,
+      numberOfWinners: m.numberOfWinners,
+      isUsable: m.isUsable,
+    }))));
+    console.log('Requested places:', requestedPlaces);
+
     let bestPlaceMarket = null;
     if (allPlaceMarkets.length) {
       if (requestedPlaces) {
-        bestPlaceMarket = allPlaceMarkets.find(m => m.placeCount === requestedPlaces)
-          || allPlaceMarkets.find(m => m.placeCount && Math.abs(m.placeCount - requestedPlaces) <= 1)
-          || allPlaceMarkets[0];
+        // Exact match on placeCount (derived from numberOfWinners)
+        bestPlaceMarket = allPlaceMarkets.find(m => m.placeCount === requestedPlaces);
+        if (!bestPlaceMarket) {
+          // Log why exact match failed
+          console.log('Exact match failed — place counts found:', allPlaceMarkets.map(m => m.placeCount));
+          // Fallback: first place market (log warning)
+          bestPlaceMarket = allPlaceMarkets[0];
+          console.log('Falling back to first place market:', bestPlaceMarket?.marketName, 'placeCount:', bestPlaceMarket?.placeCount);
+        } else {
+          console.log('Exact match found:', bestPlaceMarket.marketName, 'placeCount:', bestPlaceMarket.placeCount);
+        }
       } else {
         bestPlaceMarket = allPlaceMarkets[0];
       }
@@ -178,7 +196,17 @@ export default async function handler(req, res) {
       return res.status(404).json({ error: 'Market not available — may be inplay or closed' });
     }
 
-    return res.status(200).json({ winMarket, bestPlaceMarket, allPlaceMarkets, allMarkets: enriched });
+    return res.status(200).json({
+      winMarket,
+      bestPlaceMarket,
+      allPlaceMarkets,
+      allMarkets: enriched,
+      debug: {
+        requestedPlaces,
+        foundPlaceCounts: allPlaceMarkets.map(m => ({ name: m.marketName, placeCount: m.placeCount, numberOfWinners: m.numberOfWinners })),
+        chosenPlaceCount: bestPlaceMarket?.placeCount ?? null,
+      }
+    });
 
   } catch (err) {
     console.error('BSP fetch error:', err.message);
