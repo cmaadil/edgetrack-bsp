@@ -70,11 +70,17 @@ function getMidPrice(runner) {
 }
 
 function extractPlaceCount(market) {
+  const name = market.marketName || '';
+  // "Top 3 Finish", "Top 4 Fin", "Top 2 Fin"
+  const topN = name.match(/top\s*(\d+)/i);
+  if (topN) return parseInt(topN[1]);
+  // "3 Places", "4 To Be Placed", "3 TBP"
+  const placeN = name.match(/(\d+)\s*(?:place|tbp)/i);
+  if (placeN) return parseInt(placeN[1]);
+  // "Each Way" standard — numberOfWinners is reliable here (not for Top N markets)
   const fromDesc = market.description?.numberOfWinners;
   if (fromDesc && fromDesc > 1) return fromDesc;
-  const name = market.marketName || '';
-  const m = name.match(/(\d+)\s*(?:place|fi|tbp)/i) || name.match(/top\s*(\d+)/i);
-  return m ? parseInt(m[1]) : null;
+  return null;
 }
 
 function classifyMarket(marketType, marketName) {
