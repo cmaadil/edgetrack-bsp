@@ -176,19 +176,19 @@ export default async function handler(req, res) {
     let bestPlaceMarket = null;
     if (allPlaceMarkets.length) {
       if (requestedPlaces) {
-        // Exact match on placeCount (derived from numberOfWinners)
+        // Exact match first
         bestPlaceMarket = allPlaceMarkets.find(m => m.placeCount === requestedPlaces);
         if (!bestPlaceMarket) {
-          // Log why exact match failed
           console.log('Exact match failed — place counts found:', allPlaceMarkets.map(m => m.placeCount));
-          // Fallback: first place market (log warning)
-          bestPlaceMarket = allPlaceMarkets[0];
-          console.log('Falling back to first place market:', bestPlaceMarket?.marketName, 'placeCount:', bestPlaceMarket?.placeCount);
+          // Fallback: lowest placeCount (standard place market, usually 3)
+          bestPlaceMarket = allPlaceMarkets.slice().sort((a, b) => (a.placeCount || 99) - (b.placeCount || 99))[0];
+          console.log('Falling back to lowest placeCount market:', bestPlaceMarket?.marketName, 'placeCount:', bestPlaceMarket?.placeCount);
         } else {
           console.log('Exact match found:', bestPlaceMarket.marketName, 'placeCount:', bestPlaceMarket.placeCount);
         }
       } else {
-        bestPlaceMarket = allPlaceMarkets[0];
+        // No places requested — default to lowest placeCount (standard market)
+        bestPlaceMarket = allPlaceMarkets.slice().sort((a, b) => (a.placeCount || 99) - (b.placeCount || 99))[0];
       }
     }
 
