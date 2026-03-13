@@ -67,8 +67,13 @@ async function betfairCall(sessionToken, method, params) {
   return res.json();
 }
 
-function extractPlaceCount(marketName) {
-  const m = marketName.match(/(\d+)\s*(?:place|fi)/i);
+function extractPlaceCount(market) {
+  // Primary: Betfair stores number of places as numberOfWinners in market description
+  const fromDesc = market.description?.numberOfWinners;
+  if (fromDesc && fromDesc > 1) return fromDesc;
+  // Fallback: parse market name for patterns like "5 Places", "4 To Be Placed", "Top 3 Finish"
+  const name = market.marketName || '';
+  const m = name.match(/(\d+)\s*(?:place|fi|tbp)/i) || name.match(/top\s*(\d+)/i);
   return m ? parseInt(m[1]) : null;
 }
 
@@ -179,7 +184,7 @@ export default async function handler(req, res) {
       const marketType = market.description?.marketType || '';
       const marketName = market.marketName || '';
       const kind = classifyMarket(marketType, marketName);
-      const placeCount = kind === 'place' ? extractPlaceCount(marketName) : null;
+      const placeCount = kind === 'place' ? extractPlaceCount(market) : null;
 
       const book = books.find(b => b.marketId === market.marketId);
       const liveBook = liveBooks.find(b => b.marketId === market.marketId);
@@ -214,15 +219,35 @@ export default async function handler(req, res) {
         }) || null;
       }
 
-      return { marketId: market.marketId, marketName, marketType, kind, placeCount, startTime: market.marketStartTime, targetRunner, allRunners: runners };
+      return { marketId: market.marketId, marketName, marketType, kind, placeCount, numberOfWinners: market.description?.numberOfWinners, startTime: market.marketStartTime, targetRunner, allRunners: runners };
     });
 
     const winMarket = enriched.find(m => m.kind === 'win');
     const allPlaceMarkets = enriched.filter(m => m.kind === 'place');
-    console.log('Place markets found:', allPlaceMarkets.map(m => ({ name: m.marketName, placeCount: m.placeCount })));
-    const bestPlaceMarket = requestedPlaces
-      ? (allPlaceMarkets.find(m => m.placeCount === requestedPlaces) || allPlaceMarkets[0])
-      : allPlaceMarkets[0] || null;
+    console.log('Place markets found:', JSON.stringify(allPlaceMarkets.map(m => ({
+      name: m.marketName,
+      type: m.marketType,
+      placeCount: m.placeCount,
+      numberOfWinners: m.numberOfWinners,
+    }))));
+    console.log('Requested places:', requestedPlaces);
+
+    let bestPlaceMarket = null;
+    if (allPlaceMarkets.length > 0) {
+      if (requestedPlaces) {
+        // Exact match first
+        bestPlaceMarket = allPlaceMarkets.find(m => m.placeCount === requestedPlaces);
+        if (!bestPlaceMarket) {
+          // Try ±1 tolerance (in case of off-by-one in name parsing)
+          bestPlaceMarket = allPlaceMarkets.find(m => m.placeCount && Math.abs(m.placeCount - requestedPlaces) <= 1);
+        }
+        // Last resort: first place market
+        if (!bestPlaceMarket) bestPlaceMarket = allPlaceMarkets[0];
+      } else {
+        bestPlaceMarket = allPlaceMarkets[0];
+      }
+    }
+    console.log('Chosen place market:', bestPlaceMarket ? { name: bestPlaceMarket.marketName, placeCount: bestPlaceMarket.placeCount } : 'none');
 
     return res.status(200).json({ winMarket, bestPlaceMarket, allPlaceMarkets, allMarkets: enriched });
 
