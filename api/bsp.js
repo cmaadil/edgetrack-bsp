@@ -213,6 +213,8 @@ export default async function handler(req, res) {
       }
     });
 
+    #hi
+
   } catch (err) {
     console.error('BSP fetch error:', err.message);
     return res.status(500).json({ error: err.message });
