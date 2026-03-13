@@ -71,15 +71,12 @@ function getMidPrice(runner) {
 
 function extractPlaceCount(market) {
   const name = market.marketName || '';
-  // "Top 3 Finish", "Top 4 Fin", "Top 2 Fin"
+  // "Top 3 Finish", "Top 4 Fin"
   const topN = name.match(/top\s*(\d+)/i);
   if (topN) return parseInt(topN[1]);
-  // "3 Places", "4 To Be Placed", "3 TBP"
-  const placeN = name.match(/(\d+)\s*(?:place|tbp)/i);
-  if (placeN) return parseInt(placeN[1]);
-  // "Each Way" standard — numberOfWinners is reliable here (not for Top N markets)
-  const fromDesc = market.description?.numberOfWinners;
-  if (fromDesc && fromDesc > 1) return fromDesc;
+  // "4 TBP", "2 TBP", "3 To Be Placed", "4 To Be Placed", "3 Places" — leading number
+  const leadingN = name.match(/^(\d+)\s*/);
+  if (leadingN) return parseInt(leadingN[1]);
   return null;
 }
 
@@ -182,19 +179,21 @@ export default async function handler(req, res) {
     let bestPlaceMarket = null;
     if (allPlaceMarkets.length) {
       if (requestedPlaces) {
-        // Exact match first
+        // Exact match on placeCount
         bestPlaceMarket = allPlaceMarkets.find(m => m.placeCount === requestedPlaces);
         if (!bestPlaceMarket) {
-          console.log('Exact match failed — place counts found:', allPlaceMarkets.map(m => m.placeCount));
-          // Fallback: lowest placeCount (standard place market, usually 3)
-          bestPlaceMarket = allPlaceMarkets.slice().sort((a, b) => (a.placeCount || 99) - (b.placeCount || 99))[0];
-          console.log('Falling back to lowest placeCount market:', bestPlaceMarket?.marketName, 'placeCount:', bestPlaceMarket?.placeCount);
+          console.log('Exact match failed — place counts found:', allPlaceMarkets.map(m => ({ name: m.marketName, placeCount: m.placeCount, type: m.marketType })));
+          // Prefer the standard PLACE market (marketType=PLACE, "To Be Placed") over OTHER_PLACE extras
+          bestPlaceMarket = allPlaceMarkets.find(m => m.marketType === 'PLACE')
+            || allPlaceMarkets.slice().sort((a, b) => (a.placeCount || 99) - (b.placeCount || 99))[0];
+          console.log('Fallback to:', bestPlaceMarket?.marketName, bestPlaceMarket?.marketType);
         } else {
           console.log('Exact match found:', bestPlaceMarket.marketName, 'placeCount:', bestPlaceMarket.placeCount);
         }
       } else {
-        // No places requested — default to lowest placeCount (standard market)
-        bestPlaceMarket = allPlaceMarkets.slice().sort((a, b) => (a.placeCount || 99) - (b.placeCount || 99))[0];
+        // No places specified — prefer standard PLACE market
+        bestPlaceMarket = allPlaceMarkets.find(m => m.marketType === 'PLACE')
+          || allPlaceMarkets.slice().sort((a, b) => (a.placeCount || 99) - (b.placeCount || 99))[0];
       }
     }
 
