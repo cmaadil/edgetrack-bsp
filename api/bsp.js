@@ -64,8 +64,11 @@ async function betfairCall(token, method, params) {
 function getMidPrice(runner) {
   const back = runner?.ex?.availableToBack?.[0]?.price;
   const lay  = runner?.ex?.availableToLay?.[0]?.price;
-  if (back > 1.01 && lay > 1.01) return parseFloat(((back + lay) / 2).toFixed(2));
-  if (back > 1.01) return back;
+  if (back > 1.01 && lay > 1.01) {
+    const mid = parseFloat(((back + lay) / 2).toFixed(2));
+    return mid <= 1000 ? mid : null; // sanity cap
+  }
+  if (back > 1.01 && back <= 1000) return back;
   return null;
 }
 
@@ -127,10 +130,15 @@ export default async function handler(req, res) {
       const cl = course.toLowerCase().replace(/[^a-z]/g, '');
       const filtered = markets.filter(m => {
         const venue = (m.event?.venue || m.event?.name || '').toLowerCase().replace(/[^a-z]/g, '');
-        return venue.includes(cl) || cl.includes(venue.slice(0, 4));
+        // Require meaningful overlap — at least 5 chars or full containment
+        return venue.includes(cl) || (cl.length >= 5 && cl.includes(venue)) || (venue.length >= 5 && cl.startsWith(venue.slice(0, 5)));
       });
       if (filtered.length) matchingMarkets = filtered;
     }
+
+    console.log('Matching markets:', matchingMarkets.map(m => ({
+      id: m.marketId, name: m.marketName, venue: m.event?.venue || m.event?.name, type: m.description?.marketType
+    })));
 
     const books = await betfairCall(token, 'listMarketBook', {
       marketIds: matchingMarkets.map(m => m.marketId),
@@ -212,8 +220,6 @@ export default async function handler(req, res) {
         chosenPlaceCount: bestPlaceMarket?.placeCount ?? null,
       }
     });
-
-    #hi
 
   } catch (err) {
     console.error('BSP fetch error:', err.message);
