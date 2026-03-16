@@ -62,13 +62,30 @@ async function betfairCall(token, method, params) {
 }
 
 function getMidPrice(runner) {
-  const back = runner?.ex?.availableToBack?.[0]?.price;
-  const lay  = runner?.ex?.availableToLay?.[0]?.price;
-  if (back > 1.01 && lay > 1.01) {
-    const mid = parseFloat(((back + lay) / 2).toFixed(2));
-    return mid <= 1000 ? mid : null; // sanity cap
+  const backLevels = runner?.ex?.availableToBack || [];
+  const layLevels  = runner?.ex?.availableToLay  || [];
+
+  // Find the best (highest) back price with meaningful liquidity (size >= 1)
+  // Filter out phantom orders at extreme prices
+  const bestLay = layLevels[0]?.price;
+
+  // Best back = highest back price that's not more than 3x the lay price
+  // (filters out phantom orders like 299 when lay is 26)
+  let bestBack = null;
+  for (const level of backLevels) {
+    if (level.price > 1.01) {
+      // If we have a lay price, use it to sanity-check the back price
+      if (bestLay && level.price > bestLay * 3) continue; // skip outlier
+      bestBack = level.price;
+      break;
+    }
   }
-  if (back > 1.01 && back <= 1000) return back;
+
+  if (bestBack && bestLay && bestBack < bestLay) {
+    return parseFloat(((bestBack + bestLay) / 2).toFixed(2));
+  }
+  if (bestBack) return bestBack;
+  if (bestLay) return bestLay;
   return null;
 }
 
@@ -130,15 +147,10 @@ export default async function handler(req, res) {
       const cl = course.toLowerCase().replace(/[^a-z]/g, '');
       const filtered = markets.filter(m => {
         const venue = (m.event?.venue || m.event?.name || '').toLowerCase().replace(/[^a-z]/g, '');
-        // Require meaningful overlap — at least 5 chars or full containment
-        return venue.includes(cl) || (cl.length >= 5 && cl.includes(venue)) || (venue.length >= 5 && cl.startsWith(venue.slice(0, 5)));
+        return venue.includes(cl) || cl.includes(venue.slice(0, 4));
       });
       if (filtered.length) matchingMarkets = filtered;
     }
-
-    console.log('Matching markets:', matchingMarkets.map(m => ({
-      id: m.marketId, name: m.marketName, venue: m.event?.venue || m.event?.name, type: m.description?.marketType
-    })));
 
     const books = await betfairCall(token, 'listMarketBook', {
       marketIds: matchingMarkets.map(m => m.marketId),
