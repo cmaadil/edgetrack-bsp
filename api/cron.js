@@ -84,10 +84,20 @@ async function supaFetch(path, method, body) {
 // ── Mid-price helper ─────────────────────────────────────────────────────────
 
 function getMidPrice(runner) {
-  const back = runner?.ex?.availableToBack?.[0]?.price;
-  const lay  = runner?.ex?.availableToLay?.[0]?.price;
-  if (back > 1.01 && lay > 1.01) return parseFloat(((back + lay) / 2).toFixed(2));
-  if (back > 1.01) return back;
+  const backLevels = runner?.ex?.availableToBack || [];
+  const layLevels  = runner?.ex?.availableToLay  || [];
+  const bestLay = layLevels[0]?.price;
+  let bestBack = null;
+  for (const level of backLevels) {
+    if (level.price > 1.01) {
+      if (bestLay && level.price > bestLay * 3) continue;
+      bestBack = level.price;
+      break;
+    }
+  }
+  if (bestBack && bestLay && bestBack < bestLay) return parseFloat(((bestBack + bestLay) / 2).toFixed(2));
+  if (bestBack) return bestBack;
+  if (bestLay) return bestLay;
   return null;
 }
 
