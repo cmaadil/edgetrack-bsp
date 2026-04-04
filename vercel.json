@@ -16,12 +16,5 @@
         { "key": "Access-Control-Allow-Headers", "value": "Content-Type" }
       ]
     }
-  ],
-  "crons": [
-    {
-      "path": "/api/cron",
-      "schedule": "* * * * *"
-    }
   ]
 }
-  
