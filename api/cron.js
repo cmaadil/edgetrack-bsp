@@ -77,7 +77,7 @@ async function supaFetch(path, method, body) {
       'Content-Type': 'application/json',
       'apikey': SUPA_SERVICE,
       'Authorization': 'Bearer ' + SUPA_SERVICE,
-      'Prefer': method === 'PATCH' ? 'return=minimal' : 'return=representation',
+      'Prefer': method === 'PATCH' || method === 'POST' ? 'return=minimal' : 'return=representation',
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -117,39 +117,62 @@ function extractPlaceCount(market) {
   return null;
 }
 
-// Simple EV calculation — works for singles and as approximation for multiples
-// EV = stake * (product of takenOdds / product of fairOdds - 1)
 function calcEV(bet, sels) {
   const stake = parseFloat(bet.stake) || 0;
   if (!stake) return null;
   const validSels = sels.filter(s => s.odds_taken > 1 && s.fair_odds > 1);
   if (!validSels.length) return null;
   const takenProduct = validSels.reduce((a, s) => a * parseFloat(s.odds_taken), 1);
-  const fairProduct  = validSels.reduce((a, s) => a * parseFloat(s.fair_odds),  1);
+  const fairProduct  = validSels.reduce((a, s) => a * parseFloat(s.fair_odds), 1);
   if (!fairProduct) return null;
-  const ev = parseFloat((stake * (takenProduct / fairProduct - 1)).toFixed(2));
-  return ev;
+  return parseFloat((stake * (takenProduct / fairProduct - 1)).toFixed(2));
+}
+
+function mapOutcome(status, sortPriority, ewPlaces) {
+  if (status === 'WINNER') return 'win';
+  if (status === 'PLACED') return 'place';
+  if (status === 'LOSER') {
+    if (ewPlaces && sortPriority && sortPriority <= ewPlaces) return 'place';
+    return 'lose';
+  }
+  if (status === 'REMOVED') return 'nr';
+  return 'pending';
+}
+
+function calcReturns(bet, sels) {
+  // Simple returns calc for singles — stake * odds if won, 0 if lost
+  const stake = parseFloat(bet.stake) || 0;
+  const isEW = bet.each_way;
+  let returns = 0;
+  for (const sel of sels) {
+    const odds = parseFloat(sel.odds_taken) || 0;
+    const ewFrac = parseFloat(sel.ew_frac) || 0.2;
+    const halfStake = isEW ? stake / 2 : stake;
+    if (sel.outcome === 'win') {
+      returns += halfStake * odds; // win part
+      if (isEW) returns += halfStake * (1 + (odds - 1) * ewFrac); // place part
+    } else if (sel.outcome === 'place' && isEW) {
+      returns += halfStake; // win part stake back
+      returns += halfStake * (1 + (odds - 1) * ewFrac); // place part
+    } else if (sel.outcome === 'nr' || sel.outcome === 'void') {
+      returns += stake; // stake refund
+    }
+  }
+  return parseFloat(returns.toFixed(2));
 }
 
 async function getCachedToken() {
-  // Try to get cached token from Supabase
   try {
     const res = await supaFetch('/cache?key=eq.betfair_token&select=value,expires_at', 'GET');
     if (Array.isArray(res) && res[0]) {
       const { value, expires_at } = res[0];
-      // Use cached token if it has more than 5 minutes left
       if (new Date(expires_at) > new Date(Date.now() + 5 * 60 * 1000)) {
-        console.log('Cron: using cached Betfair token');
         return value;
       }
     }
   } catch(e) {}
 
-  // Get fresh token
-  console.log('Cron: fetching fresh Betfair token');
   const token = await getSessionToken();
-
-  // Cache it for 7 hours
   const expiresAt = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString();
   try {
     await supaFetch('/cache?key=eq.betfair_token', 'DELETE');
@@ -157,7 +180,6 @@ async function getCachedToken() {
   } catch(e) {
     console.error('Cron: failed to cache token:', e.message);
   }
-
   return token;
 }
 
@@ -174,35 +196,72 @@ export default async function handler(req, res) {
       return res.status(200).json({ message: 'No pending bets', updated: 0 });
     }
 
-    const hrBets = [];
-    const marketIdBets = [];
+    const now = Date.now();
+    const PRE_RACE_STOP_MS = 2 * 60 * 1000; // stop fetching live prices 2 mins before off
+
+    // Categorise bets
+    const liveRefreshBets  = []; // pre-race, update live mid-price
+    const autoSettleBets   = []; // post-race, fetch BSP + settle
+    const hrRaceBets       = []; // HR without market_id, use race lookup
 
     for (const bet of bets) {
       const sels = typeof bet.selections === 'string' ? JSON.parse(bet.selections) : (bet.selections || []);
       const pendingSels = sels.filter(s => !s.outcome || s.outcome === 'pending');
       if (!pendingSels.length) continue;
+
       const isHR = bet.sport === 'horse_racing' || bet.sport === 'greyhounds';
       const hasMarketId = pendingSels.some(s => s.market_id && s.selection_id);
+
       if (hasMarketId) {
-        marketIdBets.push({ bet, sels, pendingSels });
+        // Check race time to decide pre vs post
+        const hasFutureRace = pendingSels.some(s => {
+          if (!s.race_date || !s.race_time) return true; // no time info, assume pre-race
+          const offMs = new Date(`${s.race_date}T${s.race_time}:00Z`).getTime();
+          return (offMs - now) > PRE_RACE_STOP_MS; // more than 2 mins away
+        });
+        const hasPastRace = pendingSels.some(s => {
+          if (!s.race_date || !s.race_time) return false;
+          const offMs = new Date(`${s.race_date}T${s.race_time}:00Z`).getTime();
+          return offMs < now; // race has already started/finished
+        });
+
+        if (hasPastRace) autoSettleBets.push({ bet, sels, pendingSels });
+        else if (hasFutureRace) liveRefreshBets.push({ bet, sels, pendingSels });
+        // within 2 min window: skip — don't fetch inaccurate near-off prices
+
       } else if (isHR) {
         const raceSels = pendingSels.filter(s => s.race_date && s.race_time && s.name);
-        if (raceSels.length) hrBets.push({ bet, sels, activeSels: raceSels });
+        if (raceSels.length) {
+          const hasPast = raceSels.some(s => {
+            const offMs = new Date(`${s.race_date}T${s.race_time}:00Z`).getTime();
+            return offMs < now;
+          });
+          const hasFuture = raceSels.some(s => {
+            const offMs = new Date(`${s.race_date}T${s.race_time}:00Z`).getTime();
+            return (offMs - now) > PRE_RACE_STOP_MS;
+          });
+          if (hasPast) autoSettleBets.push({ bet, sels, activeSels: raceSels, useRaceLookup: true });
+          else if (hasFuture) hrRaceBets.push({ bet, sels, activeSels: raceSels });
+        }
+      } else {
+        // Non-HR with market_id but no race time — always refresh
+        if (hasMarketId) liveRefreshBets.push({ bet, sels, pendingSels });
       }
     }
 
-    console.log(`Cron: ${marketIdBets.length} market-ID bets, ${hrBets.length} HR race bets`);
+    console.log(`Cron: ${liveRefreshBets.length} live refresh, ${autoSettleBets.length} to settle, ${hrRaceBets.length} HR race`);
 
-    if (!marketIdBets.length && !hrBets.length) {
-      return res.status(200).json({ message: 'No bets to refresh', updated: 0 });
+    if (!liveRefreshBets.length && !autoSettleBets.length && !hrRaceBets.length) {
+      return res.status(200).json({ message: 'No bets to process', updated: 0 });
     }
 
     const token = await getCachedToken();
     let updatedCount = 0;
 
-    if (marketIdBets.length) {
+    // ── 1. Live pre-race refresh (mid-price, >2 mins before off) ──────────────
+    if (liveRefreshBets.length) {
       const marketIdMap = new Map();
-      for (const { bet, sels } of marketIdBets) {
+      for (const { bet, sels } of liveRefreshBets) {
         for (let i = 0; i < sels.length; i++) {
           const sel = sels[i];
           if (!sel.market_id || !sel.selection_id) continue;
@@ -212,11 +271,9 @@ export default async function handler(req, res) {
         }
       }
 
-      const allMarketIds = [...marketIdMap.keys()];
       const chunks = [];
-      for (let i = 0; i < allMarketIds.length; i += 200) {
-        chunks.push(allMarketIds.slice(i, i + 200));
-      }
+      const allIds = [...marketIdMap.keys()];
+      for (let i = 0; i < allIds.length; i += 200) chunks.push(allIds.slice(i, i + 200));
 
       for (const chunk of chunks) {
         try {
@@ -226,6 +283,7 @@ export default async function handler(req, res) {
           });
           if (!Array.isArray(books)) continue;
           for (const book of books) {
+            if (book.status !== 'OPEN' || book.inplay) continue; // skip in-play
             const entries = marketIdMap.get(book.marketId) || [];
             for (const { sels, sel, selIdx } of entries) {
               const runner = (book.runners || []).find(r => r.selectionId === sel.selection_id);
@@ -236,17 +294,15 @@ export default async function handler(req, res) {
             }
           }
         } catch(e) {
-          console.error('Cron market book error:', e.message);
+          console.error('Cron live refresh error:', e.message);
         }
       }
 
-      const updatedBetIds = new Set();
-      for (const { bet, sels } of marketIdBets) {
-        const hasMktId = sels.some(s => s.market_id && s.selection_id && (!s.outcome || s.outcome === 'pending'));
-        if (hasMktId && !updatedBetIds.has(bet.id)) {
-          updatedBetIds.add(bet.id);
+      const updatedIds = new Set();
+      for (const { bet, sels } of liveRefreshBets) {
+        if (!updatedIds.has(bet.id)) {
+          updatedIds.add(bet.id);
           const evOdds = calcEV(bet, sels);
-          console.log(`Cron: bet ${bet.id} stake=${bet.stake} ev=${evOdds}`);
           const patch = { selections: JSON.stringify(sels) };
           if (evOdds != null) patch.ev_odds = evOdds;
           await supaFetch(`/bets?id=eq.${bet.id}`, 'PATCH', patch);
@@ -255,7 +311,94 @@ export default async function handler(req, res) {
       }
     }
 
-    if (hrBets.length) {
+    // ── 2. Auto-settle post-race bets (fetch real BSP) ────────────────────────
+    if (autoSettleBets.length) {
+      // Collect all market IDs needing BSP
+      const settleMarketMap = new Map();
+      for (const entry of autoSettleBets) {
+        const { bet, sels, pendingSels, useRaceLookup } = entry;
+        if (useRaceLookup) continue; // handle separately below
+        for (let i = 0; i < sels.length; i++) {
+          const sel = sels[i];
+          if (!sel.market_id || !sel.selection_id) continue;
+          if (sel.outcome && sel.outcome !== 'pending') continue;
+          if (!settleMarketMap.has(sel.market_id)) settleMarketMap.set(sel.market_id, []);
+          settleMarketMap.get(sel.market_id).push({ bet, sels, sel, selIdx: i });
+        }
+      }
+
+      if (settleMarketMap.size) {
+        const chunks = [];
+        const allIds = [...settleMarketMap.keys()];
+        for (let i = 0; i < allIds.length; i += 200) chunks.push(allIds.slice(i, i + 200));
+
+        for (const chunk of chunks) {
+          try {
+            const books = await betfairCall(token, 'listMarketBook', {
+              marketIds: chunk,
+              priceProjection: { priceData: ['SP_TRADED'], bspPrices: true },
+            });
+            if (!Array.isArray(books)) continue;
+
+            for (const book of books) {
+              if (book.status !== 'CLOSED') continue; // only settle closed markets
+              const entries = settleMarketMap.get(book.marketId) || [];
+              for (const { sels, sel, selIdx } of entries) {
+                const runner = book.runners?.find(r => r.selectionId === sel.selection_id);
+                if (!runner) continue;
+
+                // Get actual BSP
+                const bsp = runner.sp?.actualSP;
+                if (bsp) {
+                  sels[selIdx].fair_odds = parseFloat(bsp.toFixed(2));
+                  console.log(`Cron settle: ${sel.name} BSP=${bsp} status=${runner.status}`);
+                }
+
+                // Determine outcome
+                const ewPlaces = parseInt(sel.ew_places) || null;
+                const sortPriority = runner.adjustedRating || null;
+                const outcome = mapOutcome(runner.status, sortPriority, ewPlaces);
+                if (outcome !== 'pending') sels[selIdx].outcome = outcome;
+              }
+            }
+          } catch(e) {
+            console.error('Cron settle error:', e.message);
+          }
+        }
+
+        // Save settled bets
+        const settledIds = new Set();
+        for (const { bet, sels } of autoSettleBets.filter(e => !e.useRaceLookup)) {
+          if (settledIds.has(bet.id)) continue;
+          settledIds.add(bet.id);
+
+          // Determine top-level result
+          const outcomes = sels.map(s => s.outcome || 'pending');
+          let result = 'open';
+          if (outcomes.every(o => o === 'pending')) result = 'pending';
+          else if (outcomes.every(o => o === 'nr' || o === 'void')) result = 'void';
+          else if (outcomes.every(o => o === 'win' || o === 'nr' || o === 'void')) result = 'won';
+          else if (outcomes.every(o => o === 'lose' || o === 'nr' || o === 'void')) result = 'lost';
+          else if (outcomes.some(o => o === 'pending')) result = 'open';
+          else result = 'partial';
+
+          const returns = (result === 'won' || result === 'partial') ? calcReturns(bet, sels) : 0;
+          const evOdds = calcEV(bet, sels);
+          const patch = {
+            selections: JSON.stringify(sels),
+            result,
+            returns,
+          };
+          if (evOdds != null) patch.ev_odds = evOdds;
+          await supaFetch(`/bets?id=eq.${bet.id}`, 'PATCH', patch);
+          console.log(`Cron: settled bet ${bet.id} → ${result}, returns=${returns}`);
+          updatedCount++;
+        }
+      }
+    }
+
+    // ── 3. HR race-based lookup (older bets without market_id) ────────────────
+    if (hrRaceBets.length) {
       const raceCache = new Map();
 
       const fetchRaceMarkets = async (sel) => {
@@ -303,7 +446,7 @@ export default async function handler(req, res) {
         return result;
       };
 
-      for (const { bet, sels, activeSels } of hrBets) {
+      for (const { bet, sels, activeSels } of hrRaceBets) {
         let changed = false;
         for (const sel of activeSels) {
           try {
