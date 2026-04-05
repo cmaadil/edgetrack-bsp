@@ -200,15 +200,14 @@ export default async function handler(req, res) {
             console.log('Cron: listMarketBook returned non-array:', JSON.stringify(books));
             continue;
           }
-            const entries = marketIdMap.get(book.marketId) || [];
-            const isUsable = book.status === 'OPEN'; // include inplay for non-HR sports
 
+          for (const book of books) {
+            const entries = marketIdMap.get(book.marketId) || [];
             for (const { bet, sels, sel, selIdx } of entries) {
               const runner = (book.runners || []).find(r => r.selectionId === sel.selection_id);
               if (!runner) continue;
               const price = getMidPrice(runner);
               if (!price) continue;
-
               sels[selIdx].fair_odds = price;
               console.log(`Cron: ${bet.sport} bet ${bet.id} sel ${sel.name} → ${price}`);
             }
