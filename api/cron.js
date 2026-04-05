@@ -136,7 +136,7 @@ export default async function handler(req, res) {
 
   try {
     const bets = await supaFetch(
-      '/bets?result=in.(pending,open)&select=id,sport,each_way,selections',
+      '/bets?result=in.(pending,open)&select=id,sport,each_way,stake,selections',
       'GET'
     );
 
@@ -216,6 +216,7 @@ export default async function handler(req, res) {
         if (hasMktId && !updatedBetIds.has(bet.id)) {
           updatedBetIds.add(bet.id);
           const evOdds = calcEV(bet, sels);
+          console.log(`Cron: bet ${bet.id} stake=${bet.stake} ev=${evOdds}`);
           const patch = { selections: JSON.stringify(sels) };
           if (evOdds != null) patch.ev_odds = evOdds;
           await supaFetch(`/bets?id=eq.${bet.id}`, 'PATCH', patch);
