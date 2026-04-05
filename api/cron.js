@@ -62,7 +62,9 @@ async function betfairCall(token, method, params) {
     },
     body: JSON.stringify(params),
   });
-  return res.json();
+  const text = await res.text();
+  if (!text || !text.trim()) return [];
+  try { return JSON.parse(text); } catch(e) { console.error('betfairCall parse error:', text.slice(0, 200)); return []; }
 }
 
 // ── Supabase helpers ─────────────────────────────────────────────────────────
@@ -194,7 +196,10 @@ export default async function handler(req, res) {
             priceProjection: { priceData: ['EX_BEST_OFFERS'] },
           });
 
-          for (const book of (books || [])) {
+          if (!Array.isArray(books)) {
+            console.log('Cron: listMarketBook returned non-array:', JSON.stringify(books));
+            continue;
+          }
             const entries = marketIdMap.get(book.marketId) || [];
             const isUsable = book.status === 'OPEN'; // include inplay for non-HR sports
 
