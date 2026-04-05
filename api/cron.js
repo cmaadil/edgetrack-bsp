@@ -117,10 +117,21 @@ export default async function handler(req, res) {
 
   try {
     // 1. Fetch all pending bets from Supabase (all sports)
-    const bets = await supaFetch(
-      `/bets?result=in.(pending,open)&select=id,sport,each_way,selections`,
-      'GET'
+    const betsRes = await fetch(
+      `${SUPA_URL}/rest/v1/bets?result=in.(pending,open)&select=id,sport,each_way,selections`,
+      {
+        headers: {
+          'apikey': SUPA_SERVICE,
+          'Authorization': 'Bearer ' + SUPA_SERVICE,
+          'Content-Type': 'application/json',
+        }
+      }
     );
+    const betsText = await betsRes.text();
+    if (!betsText || !betsText.trim()) {
+      return res.status(200).json({ message: 'No pending bets', updated: 0 });
+    }
+    const bets = JSON.parse(betsText);
 
     if (!Array.isArray(bets) || !bets.length) {
       return res.status(200).json({ message: 'No pending bets', updated: 0 });
