@@ -117,6 +117,20 @@ function extractPlaceCount(market) {
   return null;
 }
 
+// Simple EV calculation — works for singles and as approximation for multiples
+// EV = stake * (product of takenOdds / product of fairOdds - 1)
+function calcEV(bet, sels) {
+  const stake = parseFloat(bet.stake) || 0;
+  if (!stake) return null;
+  const validSels = sels.filter(s => s.odds_taken > 1 && s.fair_odds > 1);
+  if (!validSels.length) return null;
+  const takenProduct = validSels.reduce((a, s) => a * parseFloat(s.odds_taken), 1);
+  const fairProduct  = validSels.reduce((a, s) => a * parseFloat(s.fair_odds),  1);
+  if (!fairProduct) return null;
+  const ev = parseFloat((stake * (takenProduct / fairProduct - 1)).toFixed(2));
+  return ev;
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).end();
 
@@ -201,7 +215,10 @@ export default async function handler(req, res) {
         const hasMktId = sels.some(s => s.market_id && s.selection_id && (!s.outcome || s.outcome === 'pending'));
         if (hasMktId && !updatedBetIds.has(bet.id)) {
           updatedBetIds.add(bet.id);
-          await supaFetch(`/bets?id=eq.${bet.id}`, 'PATCH', { selections: JSON.stringify(sels) });
+          const evOdds = calcEV(bet, sels);
+          const patch = { selections: JSON.stringify(sels) };
+          if (evOdds != null) patch.ev_odds = evOdds;
+          await supaFetch(`/bets?id=eq.${bet.id}`, 'PATCH', patch);
           updatedCount++;
         }
       }
@@ -282,7 +299,10 @@ export default async function handler(req, res) {
           }
         }
         if (changed) {
-          await supaFetch(`/bets?id=eq.${bet.id}`, 'PATCH', { selections: JSON.stringify(sels) });
+          const evOdds = calcEV(bet, sels);
+          const patch = { selections: JSON.stringify(sels) };
+          if (evOdds != null) patch.ev_odds = evOdds;
+          await supaFetch(`/bets?id=eq.${bet.id}`, 'PATCH', patch);
           updatedCount++;
         }
       }
