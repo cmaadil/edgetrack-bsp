@@ -131,6 +131,36 @@ function calcEV(bet, sels) {
   return ev;
 }
 
+async function getCachedToken() {
+  // Try to get cached token from Supabase
+  try {
+    const res = await supaFetch('/cache?key=eq.betfair_token&select=value,expires_at', 'GET');
+    if (Array.isArray(res) && res[0]) {
+      const { value, expires_at } = res[0];
+      // Use cached token if it has more than 5 minutes left
+      if (new Date(expires_at) > new Date(Date.now() + 5 * 60 * 1000)) {
+        console.log('Cron: using cached Betfair token');
+        return value;
+      }
+    }
+  } catch(e) {}
+
+  // Get fresh token
+  console.log('Cron: fetching fresh Betfair token');
+  const token = await getSessionToken();
+
+  // Cache it for 7 hours
+  const expiresAt = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString();
+  try {
+    await supaFetch('/cache?key=eq.betfair_token', 'DELETE');
+    await supaFetch('/cache', 'POST', { key: 'betfair_token', value: token, expires_at: expiresAt });
+  } catch(e) {
+    console.error('Cron: failed to cache token:', e.message);
+  }
+
+  return token;
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).end();
 
@@ -167,7 +197,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ message: 'No bets to refresh', updated: 0 });
     }
 
-    const token = await getSessionToken();
+    const token = await getCachedToken();
     let updatedCount = 0;
 
     if (marketIdBets.length) {
