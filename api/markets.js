@@ -212,7 +212,10 @@ export default async function handler(req, res) {
         .map(r => {
           const desc = market.runners?.find(rd => rd.selectionId === r.selectionId);
           const midPrice = isUsable ? getMidPrice(r) : null;
-          return { selectionId: r.selectionId, name: desc?.runnerName || 'Runner ' + r.selectionId, midPrice, isLive: !!midPrice, status: r.status };
+          const handicap = r.handicap != null && r.handicap !== 0 ? r.handicap : null;
+          const baseName = desc?.runnerName || 'Runner ' + r.selectionId;
+          const name = handicap != null ? `${baseName} (${handicap > 0 ? '+' : ''}${handicap})` : baseName;
+          return { selectionId: r.selectionId, name, handicap, midPrice, isLive: !!midPrice, status: r.status };
         })
         .sort((a, b) => (a.midPrice || 999) - (b.midPrice || 999));
       return res.status(200).json({
@@ -223,7 +226,7 @@ export default async function handler(req, res) {
     }
 
     return res.status(400).json({ error: 'Invalid step' });
-  
+
   } catch (err) {
     console.error('Markets error:', err.message);
     return res.status(500).json({ error: err.message });
