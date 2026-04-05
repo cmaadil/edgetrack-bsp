@@ -217,7 +217,16 @@ export default async function handler(req, res) {
           const name = handicap != null ? `${baseName} (${handicap > 0 ? '+' : ''}${handicap})` : baseName;
           return { selectionId: r.selectionId, name, handicap, midPrice, isLive: !!midPrice, status: r.status };
         })
-        .sort((a, b) => (a.midPrice || 999) - (b.midPrice || 999));
+        .sort((a, b) => {
+          // For handicap markets, sort by base name then handicap value descending
+          const aBase = a.name.replace(/\s*\([+-]?[\d.]+\)\s*$/, '');
+          const bBase = b.name.replace(/\s*\([+-]?[\d.]+\)\s*$/, '');
+          if (a.handicap != null && b.handicap != null) {
+            if (aBase !== bBase) return aBase.localeCompare(bBase);
+            return (b.handicap || 0) - (a.handicap || 0);
+          }
+          return (a.midPrice || 999) - (b.midPrice || 999);
+        });
       return res.status(200).json({
         marketId, marketName: market.marketName, marketType: market.description?.marketType,
         startTime: market.marketStartTime, eventName: market.event?.name,
